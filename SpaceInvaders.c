@@ -72,12 +72,13 @@
 #include "Nokia5110.h"
 #include "Random.h"
 #include "TExaS.h"
+#include "ADC.h"
+#include "firebtn.h"
 
 void DisableInterrupts(void); // Disable interrupts
 void EnableInterrupts(void);  // Enable interrupts
-void Timer2_Init(unsigned long period);
 void Delay100ms(unsigned long count); // time delay in 0.1 seconds
-unsigned long TimerCount;
+void SysTick_Init(unsigned long period);
 unsigned long Semaphore;
 
 
@@ -322,67 +323,238 @@ const unsigned char Laser1[] = {
 #define PLAYERW     ((unsigned char)PlayerShip0[18])
 #define PLAYERH     ((unsigned char)PlayerShip0[22])
 
+#define min(x,y) (((x)<(y))?(x):(y))
+#define max(x,y) (((x)>(y))?(x):(y))
+
+#define MAX_ENEMY 8
+#define ENEMY_SPEED 10
+//ENEMY_SPEED越小越快
+
+/*
+图像规划（横坐标底）：
+47-40：PlayerShip
+39-35：Bunker
+9-34：Enemy
+
+图像总宽度：84
+PlayerShip:18(0-66)
+Enemy：16（0-68）
+Bunker：18（0-66）
+*/
+
+typedef struct {
+    int xmin,xmax;
+    int ymin,ymax;
+} gobj;
+
+typedef enum {
+    Enemy10,Enemy20,Enemy30
+} EnemyType;
+
+typedef struct {
+    int x,y; // 存储左下坐标，此时可行的范围是
+    int stat; //0: A, 1: B, -1:不存在
+    EnemyType type;
+} Enemy; // 存储敌人信息
+
+typedef struct {
+    gobj pos;
+    int dir; // dir -1表示向下，1表示向上，0表示无此炸弹，2-5表示爆炸。
+} bullet;
+
+// Bullet to do
+
+// Global Game Info
+int score;
+int bunker_stat;
+
+gobj ship,bunker;
+
+Enemy enemys[MAX_ENEMY];
+
+
+void draw_enemy(Enemy *enemy) {
+    if (enemy->stat == -1) return;
+    switch (enemy->type) {
+        case Enemy10:
+            Nokia5110_PrintBMP(enemy->x,enemy->y,enemy->stat?SmallEnemy10PointB:SmallEnemy10PointA, 0);
+            break;
+        case Enemy20:
+            Nokia5110_PrintBMP(enemy->x,enemy->y,enemy->stat?SmallEnemy20PointB:SmallEnemy20PointA, 0);
+            break;
+        case Enemy30:
+            Nokia5110_PrintBMP(enemy->x,enemy->y,enemy->stat?SmallEnemy30PointB:SmallEnemy30PointA, 0);
+            break;
+    }
+}
+
+void draw_enemy_list() {
+    int i;
+    for (i=0;i<MAX_ENEMY;i++) draw_enemy(&enemys[i]);
+}
+
+void draw_bunker() {
+    const unsigned char *bunker_to_draw;
+    switch (bunker_stat) {
+        case 1:
+            bunker_to_draw = Bunker1;
+            break;
+        case 2:
+            bunker_to_draw = Bunker2;
+            break;
+        case 3:
+            bunker_to_draw = Bunker3;
+            break;
+        default:
+            bunker_to_draw = Bunker0;
+    }
+    Nokia5110_PrintBMP(bunker.xmin, bunker.ymax, bunker_to_draw, 0);
+}
+
+void move_enemy() {
+    int i;
+    static int cnt;
+    cnt = (cnt + 1) % ENEMY_SPEED;
+    if (cnt == 0) {
+        for (i=0;i<MAX_ENEMY;i++) if (enemys[i].stat != -1) {
+            enemys[i].x = (enemys[i].x + 1) % (84 - ENEMY10W);
+            enemys[i].stat = (enemys[i].stat + 1) & 1;//等价于+ 1 % 2
+        }
+    }
+}
+
+
+gobj enemy_to_gobj(Enemy *enemy) {
+    gobj res;
+    res.xmin = enemy->x;
+    res.xmax = res.xmin + ENEMY10W;
+    res.ymax = enemy->y;
+    res.ymin = res.ymax - ENEMY10H;
+    return res;
+}
+
+int is_coll(gobj *a,gobj *b) { // 判断是否碰撞
+    int xmin = max(a->xmin,b->xmin);
+    int xmax = min(a->xmax,b->xmax);
+    int ymin = max(a->ymin,b->ymin);
+    int ymax = min(a->ymax,b->ymax);
+    return (xmin <= xmax && ymin <= ymax);
+}
+
+void show_welcome() { // 显示欢迎信息
+    Nokia5110_Clear();
+    Nokia5110_SetCursor(0, 0);
+    Nokia5110_OutString("SpaceInvader");
+    Nokia5110_SetCursor(1, 1);
+    Nokia5110_OutString("By cyy,hhr,gjq@CQU");
+    Nokia5110_SetCursor(0, 4);
+    Nokia5110_OutString("PressToStart");
+}
+
+void show_gameover() { // 游戏结束，显示分数
+    Nokia5110_Clear();
+    Nokia5110_SetCursor(0, 0);
+    Nokia5110_OutString("Game Over");
+    Nokia5110_SetCursor(0, 1);
+    Nokia5110_OutString("Score:");
+    Nokia5110_SetCursor(6, 1);
+    Nokia5110_OutUDec(score);
+    Nokia5110_SetCursor(0, 4);
+    Nokia5110_OutString("PressToRetry");
+}
+
+void input_game() {
+    ship.xmin = ADC0_In()*66 / 4096;
+    ship.xmax = ship.xmin - PLAYERW;
+}
+
+void draw_game() {
+    Nokia5110_ClearBuffer();
+    Nokia5110_PrintBMP(ship.xmin, ship.ymax, PlayerShip0, 0);
+    draw_bunker();
+    draw_enemy_list();
+    Nokia5110_DisplayBuffer();
+}
+
+void gaming() { // 游戏中
+    input_game();
+    draw_game();
+    // 判断碰撞以及子弹
+    move_enemy();
+}
+
+enum GameStatus {
+    WELCOME,
+    GAMING,
+    GAMEOVER
+}gamestatus;
+
+
+int adc_value;
+
+void game_init(void) {
+    int i;
+    score = 0;
+    bunker_stat = 0;
+    ship.ymax = 47;
+    ship.ymin = ship.ymax - PLAYERH + 1;
+    bunker.xmin = 33;
+    bunker.xmax = bunker.xmin + BUNKERW - 1;
+    bunker.ymax = ship.ymin + 1;
+    bunker.ymin = bunker.ymax - BUNKERH - 1;
+    for (i=0;i<10;i++) {
+        enemys[i].stat = 0;
+        enemys[i].type = Random() % 3;
+        enemys[i].y = 9 + Random() % 26;
+        enemys[i].x = Random() % 68;
+    }
+}
+
+
+void game_dispatch(void) {
+    switch (gamestatus) {
+        case WELCOME:
+            show_welcome();
+            if (Fire_Pushed()) {
+                game_init();
+                gamestatus = GAMING;
+                Delay100ms(1);
+            }
+            break;
+        case GAMING:
+            gaming();
+            if (TwoFire_Pushed()) {
+                gamestatus = GAMEOVER;
+            }
+            break;
+        case GAMEOVER:
+            show_gameover();
+            if (Fire_Pushed()) {
+                gamestatus = WELCOME;
+                Delay100ms(1);
+            }
+            break;
+        default:
+            break;
+    }
+    while (Semaphore == 0);
+    Semaphore = 0;
+}
 
 int main(void){
     TExaS_Init(SSI0_Real_Nokia5110_Scope);  // set system clock to 80 MHz
     Random_Init(1);
+    ADC0_Init();
+    Fire_Init();
+    SysTick_Init(80*1000*1000/20);
     Nokia5110_Init();
     Nokia5110_ClearBuffer();
     Nokia5110_DisplayBuffer();      // draw buffer
-
-    Nokia5110_PrintBMP(32, 47, PlayerShip0, 0); // player ship middle bottom
-    Nokia5110_PrintBMP(33, 47 - PLAYERH, Bunker0, 0);
-
-    Nokia5110_PrintBMP(0, ENEMY10H - 1, SmallEnemy10PointA, 0);
-    Nokia5110_PrintBMP(16, ENEMY10H - 1, SmallEnemy20PointA, 0);
-    Nokia5110_PrintBMP(32, ENEMY10H - 1, SmallEnemy20PointA, 0);
-    Nokia5110_PrintBMP(48, ENEMY10H - 1, SmallEnemy30PointA, 0);
-    Nokia5110_PrintBMP(64, ENEMY10H - 1, SmallEnemy30PointA, 0);
-    Nokia5110_DisplayBuffer();     // draw buffer
-
-    Delay100ms(50);              // delay 5 sec at 50 MHz
-
-
-    Nokia5110_Clear();
-    Nokia5110_SetCursor(1, 1);
-    Nokia5110_OutString("GAME OVER");
-    Nokia5110_SetCursor(1, 2);
-    Nokia5110_OutString("Nice try,");
-    Nokia5110_SetCursor(1, 3);
-    Nokia5110_OutString("Earthling!");
-    Nokia5110_SetCursor(2, 4);
-    Nokia5110_OutUDec(1234);
     while(1){
+        game_dispatch();
     }
-
 }
 
-
-// You can use this timer only if you learn how it works
-void Timer2_Init(unsigned long period){ 
-    unsigned long volatile delay;
-    SYSCTL_RCGCTIMER_R |= 0x04;   // 0) activate timer2
-    delay = SYSCTL_RCGCTIMER_R;
-    TimerCount = 0;
-    Semaphore = 0;
-    TIMER2_CTL_R = 0x00000000;    // 1) disable timer2A during setup
-    TIMER2_CFG_R = 0x00000000;    // 2) configure for 32-bit mode
-    TIMER2_TAMR_R = 0x00000002;   // 3) configure for periodic mode, default down-count settings
-    TIMER2_TAILR_R = period-1;    // 4) reload value
-    TIMER2_TAPR_R = 0;            // 5) bus clock resolution
-    TIMER2_ICR_R = 0x00000001;    // 6) clear timer2A timeout flag
-    TIMER2_IMR_R = 0x00000001;    // 7) arm timeout interrupt
-    NVIC_PRI5_R = (NVIC_PRI5_R&0x00FFFFFF)|0x80000000; // 8) priority 4
-// interrupts enabled in the main program after all devices initialized
-// vector number 39, interrupt number 23
-    NVIC_EN0_R = 1<<23;           // 9) enable IRQ 23 in NVIC
-    TIMER2_CTL_R = 0x00000001;    // 10) enable timer2A
-}
-void Timer2A_Handler(void){ 
-    TIMER2_ICR_R = 0x00000001;   // acknowledge timer2A timeout
-    TimerCount++;
-    Semaphore = 1; // trigger
-}
 void Delay100ms(unsigned long count){unsigned long volatile time;
     while(count>0){
         time = 727240;  // 0.1sec at 80 MHz
@@ -391,4 +563,16 @@ void Delay100ms(unsigned long count){unsigned long volatile time;
         }
         count--;
     }
+}
+void SysTick_Init(unsigned long period) {
+    NVIC_ST_CTRL_R = 0;         // disable SysTick during setup
+    NVIC_ST_RELOAD_R = period-1;// reload value
+    NVIC_ST_CURRENT_R = 0;      // any write to current clears it
+    NVIC_SYS_PRI3_R = (NVIC_SYS_PRI3_R&0x00FFFFFF)|0x20000000; // priority 1
+    NVIC_ST_CTRL_R = 0x0007;  // enable SysTick with core clock and interrupts
+    Semaphore = 0;
+}
+
+void SysTick_Handler(void) {
+    Semaphore = 1;
 }
