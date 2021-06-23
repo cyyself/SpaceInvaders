@@ -326,15 +326,21 @@ const unsigned char Laser1[] = {
 #define min(x,y) (((x)<(y))?(x):(y))
 #define max(x,y) (((x)>(y))?(x):(y))
 
+// ENEMY和BULLET的数组大小，越小越快
 #define MAX_ENEMY 8
+#define MAX_BULLET 20
 // SPEED越小越快
 #define ENEMY_SPEED 10
-#define BULLET_SPEED 8
+#define BULLET_SPEED 3
 // BULLET_WAIT为两次子弹的间隔时间
 #define BULLET_WAIT 10
-#define MAX_BULLET 10
 // 新敌人的产生时间
 #define TIME_NEW_ENEMY 200
+// 10分敌人不射子弹
+// 20分敌人射出子弹的概率
+#define ENEMY20_BULLET_ISSUE 10
+// 30分敌人射出子弹的概率
+#define ENEMY30_BULLET_ISSUE 5
 
 
 /*
@@ -442,85 +448,6 @@ void draw_bunker() {
     if (bunker_to_draw) Nokia5110_PrintBMP(bunker.xmin, bunker.ymax, bunker_to_draw, 0);
 }
 
-void move_enemy() {
-    int i;
-    static int cnt;
-    cnt = (cnt + 1) % ENEMY_SPEED;
-    if (cnt == 0) {
-        for (i=0;i<MAX_ENEMY;i++) if (enemys[i].stat != -1) {
-            enemys[i].x = (enemys[i].x + 1) % (84 - ENEMY10W);
-            enemys[i].stat = (enemys[i].stat + 1) & 1;//等价于+ 1 % 2
-        }
-    }
-}
-
-void draw_bullet() {
-    int i;
-    for (i=0;i<MAX_BULLET;i++) {
-        if (bullets[i].dir) {
-            if (bullets[i].dir == -1 || bullets[i].dir == 1) Nokia5110_PrintBMP(bullets[i].pos.xmin,bullets[i].pos.ymin,(Random()&1)?Missile1:Missile0, 0);
-            else {
-                Nokia5110_PrintBMP(bullets[i].pos.xmin,bullets[i].pos.ymin,(bullets[i].dir==3)?BigExplosion1:BigExplosion0, 0);
-            }
-        }
-    }
-}
-
-void move_bullet() {
-    int i,j;
-    static int cnt;
-    cnt = (cnt + 1) % ENEMY_SPEED;
-    if (cnt == 0) {
-        for (i=0;i<MAX_BULLET;i++) if (bullets[i].dir) {
-            if (bullets[i].dir == -1 || bullets[i].dir == 1) {
-                bullets[i].pos.ymin += bullets[i].dir;
-                bullets[i].pos.ymax += bullets[i].dir;
-                if (bullets[i].pos.ymin == 0 || bullets[i].pos.ymax == 48) {
-                    bunker_stat ++;
-                    bullets[i].dir = 2;
-                    continue;
-                }
-                // 碰撞检测
-                if (bullets[i].dir == -1) { // 向上飞的子弹只对敌人和Bunker有效
-                    if (bunker_stat <= 2 && is_coll(&bullets[i].pos,&bunker)) {
-                        bunker_stat ++;
-                        bullets[i].dir = 2;
-                    }
-                    for (j=0;j<MAX_ENEMY;j++) {
-                        gobj this_enemy = enemy_to_gobj(&enemys[j]);
-                        if (enemys[j].stat == -1) continue;
-                        if (is_coll(&bullets[i].pos,&this_enemy)) {
-                            bullets[i].dir = 2;
-                            switch (enemys[j].type) {
-                                case Enemy10:
-                                    score += 10;
-                                    break;
-                                case Enemy20:
-                                    score += 20;
-                                    break;
-                                case Enemy30:
-                                    score += 30;
-                                    break;
-                                default:
-                                    break;
-                            }
-                            enemys[j].stat = -1;
-                            j = MAX_ENEMY; // 不知道为什么break不行，因此这样做了个Workaround
-                        }
-                    }
-                }
-                else {
-                    // TODO: 向下射的子弹
-                }
-            }
-            else {
-                if (bullets[i].dir == 2) bullets[i].dir = 3;
-                else bullets[i].dir = 0;
-            }
-        }
-    }
-}
-
 void add_bullet(int dir,int x,int y) {
     int i;
     for (i=0;i<MAX_BULLET;i++) if (!bullets[i].dir) {
@@ -530,6 +457,88 @@ void add_bullet(int dir,int x,int y) {
         bullets[i].pos.ymax = y + MISSILEH/2;
         bullets[i].dir = dir;
         return;
+    }
+}
+
+void move_enemy() {
+    int i;
+    static int cnt;
+    cnt = (cnt + 1) % ENEMY_SPEED;
+    if (cnt == 0) {
+        for (i=0;i<MAX_ENEMY;i++) if (enemys[i].stat != -1) {
+            enemys[i].x = (enemys[i].x + 1) % (84 - ENEMY10W);
+            enemys[i].stat = (enemys[i].stat + 1) & 1;//等价于+ 1 % 2
+            if (enemys[i].type == Enemy20 && Random() % ENEMY20_BULLET_ISSUE == 0) {
+                add_bullet(1,enemys[i].x,enemys[i].y);
+            }
+            if (enemys[i].type == Enemy30 && Random() % ENEMY30_BULLET_ISSUE == 0) {
+                add_bullet(1,enemys[i].x,enemys[i].y);
+            }
+        }
+    }
+}
+
+void draw_bullet() {
+    int i;
+    for (i=0;i<MAX_BULLET;i++) {
+        if (bullets[i].dir) {
+            if (bullets[i].dir == -1 || bullets[i].dir == 1) Nokia5110_PrintBMP(bullets[i].pos.xmin,bullets[i].pos.ymax,(Random()&1)?Missile1:Missile0, 0);
+            else {
+                Nokia5110_PrintBMP(bullets[i].pos.xmin,bullets[i].pos.ymax,(bullets[i].dir==3)?BigExplosion1:BigExplosion0, 0);
+            }
+        }
+    }
+}
+
+void move_bullet() {
+    int i,j;
+    static int cnt;
+    cnt = (cnt + 1) % BULLET_SPEED;
+    if (cnt == 0) {
+        for (i=0;i<MAX_BULLET;i++) if (bullets[i].dir) {
+            if (bullets[i].dir == -1 || bullets[i].dir == 1) {
+                bullets[i].pos.ymin += bullets[i].dir;
+                bullets[i].pos.ymax += bullets[i].dir;
+                if (bullets[i].pos.ymin == 0 || bullets[i].pos.ymax == 47) {
+                    bullets[i].dir = 2;
+                }
+                // 碰撞检测
+                if (bullets[i].dir == -1) { // 向上飞的子弹只对敌人和Bunker有效
+                    if (bunker_stat <= 2 && is_coll(&bullets[i].pos,&bunker)) { // 先检查是否和Bunker碰撞
+                        bunker_stat ++;
+                        bullets[i].dir = 2;
+                        continue;
+                    }
+                    for (j=0;j<MAX_ENEMY;j++) { // 检查和敌人的碰撞
+                        gobj this_enemy = enemy_to_gobj(&enemys[j]);
+                        if (enemys[j].stat != -1 && is_coll(&bullets[i].pos,&this_enemy)) {
+                            bullets[i].dir = 2;
+                            if (enemys[j].type == Enemy10) score += 10;
+                            else if (enemys[j].type == Enemy20) score += 20;
+                            else score += 20;
+                            enemys[j].stat = -1;
+                            break;
+                        }
+                    }
+                }
+                else if (bullets[i].dir == 1) {
+                    // 向下射的子弹
+                    if (bunker_stat <= 2 && is_coll(&bullets[i].pos,&bunker)) {
+                        bunker_stat ++;
+                        bullets[i].dir = 2;
+                        continue;
+                    }
+                    if (is_coll(&bullets[i].pos,&ship)) {
+                        gamestatus = GAMEOVER;
+                        bullets[i].dir = 2;
+                    }
+                }
+            }
+            else {
+                if (bullets[i].dir == 2) bullets[i].dir = 3;
+                else bullets[i].dir = 0;
+            }
+        }
     }
 }
 
@@ -548,8 +557,12 @@ void show_welcome() { // 显示欢迎信息
     Nokia5110_Clear();
     Nokia5110_SetCursor(0, 0);
     Nokia5110_OutString("SpaceInvader");
-    Nokia5110_SetCursor(1, 1);
-    Nokia5110_OutString("By cyy,hhr,gjq@CQU");
+    Nokia5110_SetCursor(0, 1);
+    Nokia5110_OutString("By:");
+    Nokia5110_SetCursor(0, 2);
+    Nokia5110_OutString("cyy,hhr,gjq");
+    Nokia5110_SetCursor(0, 3);
+    Nokia5110_OutString("@Chongqing U");
     Nokia5110_SetCursor(0, 4);
     Nokia5110_OutString("PressToStart");
 }
@@ -569,17 +582,21 @@ void show_gameover() { // 游戏结束，显示分数
 void input_game() {
     static int last_fire_pushed;
     ship.xmin = ADC0_In()*66 / 4096;
-    ship.xmax = ship.xmin - PLAYERW;
+    ship.xmax = ship.xmin + PLAYERW;
     if (last_fire_pushed == 0 && Fire_Pushed()) {
-        add_bullet(-1,ship.xmin+PLAYERW/2,ship.ymin+PLAYERH/2);
+        add_bullet(-1,ship.xmin+PLAYERW/2,ship.ymin-MISSILEH/2);
         last_fire_pushed = 10;
     }
     if (last_fire_pushed) last_fire_pushed --;
 }
 
+void draw_ship() {
+    Nokia5110_PrintBMP(ship.xmin, ship.ymax, PlayerShip0, 0);
+}
+
 void draw_game() {
     Nokia5110_ClearBuffer();
-    Nokia5110_PrintBMP(ship.xmin, ship.ymax, PlayerShip0, 0);
+    draw_ship();
     draw_bunker();
     draw_enemy_list();
     draw_bullet();
