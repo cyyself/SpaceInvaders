@@ -74,6 +74,7 @@
 #include "TExaS.h"
 #include "ADC.h"
 #include "firebtn.h"
+#include "Sound.h"
 
 void DisableInterrupts(void); // Disable interrupts
 void EnableInterrupts(void);  // Enable interrupts
@@ -456,6 +457,7 @@ void add_bullet(int dir,int x,int y) {
         bullets[i].pos.ymin = y - MISSILEH/2;
         bullets[i].pos.ymax = y + MISSILEH/2;
         bullets[i].dir = dir;
+        Sound_Shoot();
         return;
     }
 }
@@ -507,6 +509,7 @@ void move_bullet() {
                     if (bunker_stat <= 2 && is_coll(&bullets[i].pos,&bunker)) { // 先检查是否和Bunker碰撞
                         bunker_stat ++;
                         bullets[i].dir = 2;
+                        Sound_Explosion();
                         continue;
                     }
                     for (j=0;j<MAX_ENEMY;j++) { // 检查和敌人的碰撞
@@ -517,6 +520,7 @@ void move_bullet() {
                             else if (enemys[j].type == Enemy20) score += 20;
                             else score += 20;
                             enemys[j].stat = -1;
+                            Sound_Killed();
                             break;
                         }
                     }
@@ -526,10 +530,12 @@ void move_bullet() {
                     if (bunker_stat <= 2 && is_coll(&bullets[i].pos,&bunker)) {
                         bunker_stat ++;
                         bullets[i].dir = 2;
+                        Sound_Explosion();
                         continue;
                     }
                     if (is_coll(&bullets[i].pos,&ship)) {
                         gamestatus = GAMEOVER;
+                        Sound_Explosion();
                         bullets[i].dir = 2;
                     }
                 }
@@ -685,8 +691,9 @@ int main(void){
     Random_Init(1);
     ADC0_Init();
     Fire_Init();
-    SysTick_Init(80*1000*1000/20);
     Nokia5110_Init();
+    Sound_Init();
+    SysTick_Init(80*1000*1000/20);
     Nokia5110_ClearBuffer();
     Nokia5110_DisplayBuffer();      // draw buffer
     while(1){

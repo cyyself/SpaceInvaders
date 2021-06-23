@@ -7,8 +7,9 @@
 // November 19, 2012
 
 #include "DAC.h"
-#include "Timer0.h"
+#include "Timer2.h"
 #include "Sound.h"
+#include "../tm4c123gh6pm.h"
 
 const unsigned char shoot[4080] = {
   129, 99, 103, 164, 214, 129, 31, 105, 204, 118, 55, 92, 140, 225, 152, 61, 84, 154, 184, 101, 
@@ -1141,22 +1142,22 @@ const unsigned char highpitch[1802] = {
 
 unsigned long Index = 0;
 const unsigned char *Wave;
-unsigned long Count = 0;
+unsigned long Sound_Count = 0; // rename to avoid Symbol multiply defined wit texas.c
 void Play(void){
-  if(Count){
+  if(Sound_Count){
     DAC_Out(Wave[Index]>>4);
     Index = Index + 1;
-    Count = Count - 1;
+    Sound_Count = Sound_Count - 1;
   }else{
   NVIC_DIS0_R = 1<<19;           // disable IRQ 19 in NVIC
   }
 }
 void Sound_Init(void){
-  DAC_Init(8);               // initialize simple 4-bit DAC
+  DAC_Init();               // initialize simple 4-bit DAC
 //  Timer0B_Init(&Play, 20000); // 4 kHz
-  Timer0_Init(&Play, 80000000/11025);     // 11.025 kHz
+  Timer2_Init(&Play, 80000000/11025);     // 11.025 kHz
   Index = 0;
-  Count = 0;
+  Sound_Count = 0;
 //   while(1){
 //     DAC_Out(2048);
 //   }
@@ -1164,9 +1165,9 @@ void Sound_Init(void){
 void Sound_Play(const unsigned char *pt, unsigned long count){
   Wave = pt;
   Index = 0;
-  Count = count;
+  Sound_Count = count;
   NVIC_EN0_R = 1<<19;           // 9) enable IRQ 19 in NVIC
-  TIMER0_CTL_R = 0x00000001;    // 10) enable TIMER0A
+  TIMER2_CTL_R = 0x00000001;    // 10) enable TIMER2A 注意，原来是Timer0
 }
 void Sound_Shoot(void){
   Sound_Play(shoot,4080);
