@@ -327,8 +327,15 @@ const unsigned char Laser1[] = {
 #define max(x,y) (((x)>(y))?(x):(y))
 
 #define MAX_ENEMY 8
+// SPEED越小越快
 #define ENEMY_SPEED 10
-//ENEMY_SPEED越小越快
+#define BULLET_SPEED 8
+// BULLET_WAIT为两次子弹的间隔时间
+#define BULLET_WAIT 10
+#define MAX_BULLET 10
+// 新敌人的产生时间
+#define TIME_NEW_ENEMY 200
+
 
 /*
 图像规划（横坐标底）：
@@ -341,6 +348,12 @@ PlayerShip:18(0-66)
 Enemy：16（0-68）
 Bunker：18（0-66）
 */
+
+enum GameStatus {
+    WELCOME,
+    GAMING,
+    GAMEOVER
+}gamestatus;
 
 typedef struct {
     int xmin,xmax;
@@ -359,18 +372,36 @@ typedef struct {
 
 typedef struct {
     gobj pos;
-    int dir; // dir -1表示向下，1表示向上，0表示无此炸弹，2-5表示爆炸。
-} bullet;
+    int dir; // dir -1表示向下，1表示向上，0表示无此炸弹，2表示爆炸。
+} Bullet;
+
+gobj enemy_to_gobj(Enemy *enemy) {
+    gobj res;
+    res.xmin = enemy->x;
+    res.xmax = res.xmin + ENEMY10W;
+    res.ymax = enemy->y;
+    res.ymin = res.ymax - ENEMY10H;
+    return res;
+}
+
+int is_coll(gobj *a,gobj *b) { // 判断是否碰撞
+    int xmin = max(a->xmin,b->xmin);
+    int xmax = min(a->xmax,b->xmax);
+    int ymin = max(a->ymin,b->ymin);
+    int ymax = min(a->ymax,b->ymax);
+    return (xmin <= xmax && ymin <= ymax);
+}
 
 // Bullet to do
 
-// Global Game Info
+// 全局游戏信息
 int score;
 int bunker_stat;
 
 gobj ship,bunker;
 
 Enemy enemys[MAX_ENEMY];
+Bullet bullets[MAX_BULLET];
 
 
 void draw_enemy(Enemy *enemy) {
@@ -396,19 +427,19 @@ void draw_enemy_list() {
 void draw_bunker() {
     const unsigned char *bunker_to_draw;
     switch (bunker_stat) {
+        case 0:
+            bunker_to_draw = Bunker0;
+            break;
         case 1:
             bunker_to_draw = Bunker1;
             break;
         case 2:
             bunker_to_draw = Bunker2;
             break;
-        case 3:
-            bunker_to_draw = Bunker3;
-            break;
         default:
-            bunker_to_draw = Bunker0;
+            bunker_to_draw = Bunker3;
     }
-    Nokia5110_PrintBMP(bunker.xmin, bunker.ymax, bunker_to_draw, 0);
+    if (bunker_to_draw) Nokia5110_PrintBMP(bunker.xmin, bunker.ymax, bunker_to_draw, 0);
 }
 
 void move_enemy() {
@@ -423,22 +454,94 @@ void move_enemy() {
     }
 }
 
-
-gobj enemy_to_gobj(Enemy *enemy) {
-    gobj res;
-    res.xmin = enemy->x;
-    res.xmax = res.xmin + ENEMY10W;
-    res.ymax = enemy->y;
-    res.ymin = res.ymax - ENEMY10H;
-    return res;
+void draw_bullet() {
+    int i;
+    for (i=0;i<MAX_BULLET;i++) {
+        if (bullets[i].dir) {
+            if (bullets[i].dir == -1 || bullets[i].dir == 1) Nokia5110_PrintBMP(bullets[i].pos.xmin,bullets[i].pos.ymin,(Random()&1)?Missile1:Missile0, 0);
+            else {
+                Nokia5110_PrintBMP(bullets[i].pos.xmin,bullets[i].pos.ymin,(bullets[i].dir==3)?BigExplosion1:BigExplosion0, 0);
+            }
+        }
+    }
 }
 
-int is_coll(gobj *a,gobj *b) { // 判断是否碰撞
-    int xmin = max(a->xmin,b->xmin);
-    int xmax = min(a->xmax,b->xmax);
-    int ymin = max(a->ymin,b->ymin);
-    int ymax = min(a->ymax,b->ymax);
-    return (xmin <= xmax && ymin <= ymax);
+void move_bullet() {
+    int i,j;
+    static int cnt;
+    cnt = (cnt + 1) % ENEMY_SPEED;
+    if (cnt == 0) {
+        for (i=0;i<MAX_BULLET;i++) if (bullets[i].dir) {
+            if (bullets[i].dir == -1 || bullets[i].dir == 1) {
+                bullets[i].pos.ymin += bullets[i].dir;
+                bullets[i].pos.ymax += bullets[i].dir;
+                if (bullets[i].pos.ymin == 0 || bullets[i].pos.ymax == 48) {
+                    bunker_stat ++;
+                    bullets[i].dir = 2;
+                    continue;
+                }
+                // 碰撞检测
+                if (bullets[i].dir == -1) { // 向上飞的子弹只对敌人和Bunker有效
+                    if (bunker_stat <= 2 && is_coll(&bullets[i].pos,&bunker)) {
+                        bunker_stat ++;
+                        bullets[i].dir = 2;
+                    }
+                    for (j=0;j<MAX_ENEMY;j++) {
+                        gobj this_enemy = enemy_to_gobj(&enemys[j]);
+                        if (enemys[j].stat == -1) continue;
+                        if (is_coll(&bullets[i].pos,&this_enemy)) {
+                            bullets[i].dir = 2;
+                            switch (enemys[j].type) {
+                                case Enemy10:
+                                    score += 10;
+                                    break;
+                                case Enemy20:
+                                    score += 20;
+                                    break;
+                                case Enemy30:
+                                    score += 30;
+                                    break;
+                                default:
+                                    break;
+                            }
+                            enemys[j].stat = -1;
+                            j = MAX_ENEMY; // 不知道为什么break不行，因此这样做了个Workaround
+                        }
+                    }
+                }
+                else {
+                    // TODO: 向下射的子弹
+                }
+            }
+            else {
+                if (bullets[i].dir == 2) bullets[i].dir = 3;
+                else bullets[i].dir = 0;
+            }
+        }
+    }
+}
+
+void add_bullet(int dir,int x,int y) {
+    int i;
+    for (i=0;i<MAX_BULLET;i++) if (!bullets[i].dir) {
+        bullets[i].pos.xmin = x - MISSILEW/2;
+        bullets[i].pos.xmax = x + MISSILEW/2;
+        bullets[i].pos.ymin = y - MISSILEH/2;
+        bullets[i].pos.ymax = y + MISSILEH/2;
+        bullets[i].dir = dir;
+        return;
+    }
+}
+
+void add_enemy(EnemyType type) {
+    int i;
+    for (i=0;i<MAX_ENEMY;i++) if (enemys[i].stat == -1) {
+        enemys[i].stat = 0;
+        enemys[i].type = type;
+        enemys[i].y = 9 + Random() % 26;
+        enemys[i].x = Random() % 68;
+        return;
+    }
 }
 
 void show_welcome() { // 显示欢迎信息
@@ -454,7 +557,7 @@ void show_welcome() { // 显示欢迎信息
 void show_gameover() { // 游戏结束，显示分数
     Nokia5110_Clear();
     Nokia5110_SetCursor(0, 0);
-    Nokia5110_OutString("Game Over");
+    Nokia5110_OutString(get_enemy_number()?"Game Over":"You Win");
     Nokia5110_SetCursor(0, 1);
     Nokia5110_OutString("Score:");
     Nokia5110_SetCursor(6, 1);
@@ -464,8 +567,14 @@ void show_gameover() { // 游戏结束，显示分数
 }
 
 void input_game() {
+    static int last_fire_pushed;
     ship.xmin = ADC0_In()*66 / 4096;
     ship.xmax = ship.xmin - PLAYERW;
+    if (last_fire_pushed == 0 && Fire_Pushed()) {
+        add_bullet(-1,ship.xmin+PLAYERW/2,ship.ymin+PLAYERH/2);
+        last_fire_pushed = 10;
+    }
+    if (last_fire_pushed) last_fire_pushed --;
 }
 
 void draw_game() {
@@ -473,21 +582,34 @@ void draw_game() {
     Nokia5110_PrintBMP(ship.xmin, ship.ymax, PlayerShip0, 0);
     draw_bunker();
     draw_enemy_list();
+    draw_bullet();
     Nokia5110_DisplayBuffer();
+}
+
+int get_enemy_number() { // 获取敌人的数量
+    int i, res = 0;
+    for (i=0;i<MAX_ENEMY;i++) {
+        if (enemys[i].stat != -1) res ++;
+    }
+    return res;
+}
+
+void move_game() {
+    static int ticks;
+    ticks = (ticks + 1) % TIME_NEW_ENEMY;
+    move_enemy();
+    move_bullet();
+    if (get_enemy_number() == 0) {
+        gamestatus = GAMEOVER;
+    }
+    if (ticks == 0) add_enemy(Random()%3);
 }
 
 void gaming() { // 游戏中
     input_game();
+    move_game();
     draw_game();
-    // 判断碰撞以及子弹
-    move_enemy();
 }
-
-enum GameStatus {
-    WELCOME,
-    GAMING,
-    GAMEOVER
-}gamestatus;
 
 
 int adc_value;
@@ -501,12 +623,11 @@ void game_init(void) {
     bunker.xmin = 33;
     bunker.xmax = bunker.xmin + BUNKERW - 1;
     bunker.ymax = ship.ymin + 1;
-    bunker.ymin = bunker.ymax - BUNKERH - 1;
-    for (i=0;i<10;i++) {
-        enemys[i].stat = 0;
-        enemys[i].type = Random() % 3;
-        enemys[i].y = 9 + Random() % 26;
-        enemys[i].x = Random() % 68;
+    bunker.ymin = bunker.ymax - BUNKERH + 1;
+    for (i=0;i<MAX_ENEMY;i++) enemys[i].stat = -1;
+    for (i=0;i<MAX_ENEMY;i++) add_enemy(Random()%3);
+    for (i=0;i<MAX_BULLET;i++) {
+        bullets[i].dir = 0;
     }
 }
 
@@ -518,20 +639,21 @@ void game_dispatch(void) {
             if (Fire_Pushed()) {
                 game_init();
                 gamestatus = GAMING;
-                Delay100ms(1);
+                Delay100ms(3);
             }
             break;
         case GAMING:
             gaming();
             if (TwoFire_Pushed()) {
                 gamestatus = GAMEOVER;
+                Delay100ms(3);
             }
             break;
         case GAMEOVER:
             show_gameover();
             if (Fire_Pushed()) {
                 gamestatus = WELCOME;
-                Delay100ms(1);
+                Delay100ms(3);
             }
             break;
         default:
