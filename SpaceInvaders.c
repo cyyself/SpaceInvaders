@@ -399,7 +399,7 @@ int is_coll(gobj *a,gobj *b) { // 判断是否碰撞
     return (xmin <= xmax && ymin <= ymax);
 }
 
-// Bullet to do
+
 
 // 全局游戏信息
 int score;
